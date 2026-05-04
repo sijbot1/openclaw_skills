@@ -75,6 +75,31 @@ The detection checks all 4 cardinal directions and 4 diagonals up to 40px outwar
 - Blue channel > Red × 1.2
 - Blue channel > Green × 1.1
 
+## Key implementation details
+
+### Marker classes on the Leaflet map
+
+The map renders campsites as colored dots in the `.leaflet-marker-pane`:
+- Available: class contains `available` → green dot
+- Unavailable: class contains `unavailable` → red dot
+- Section labels: class `map-site-label` with text like "Campground A"
+- Clickable markers: class contains `maplink`
+
+### Section cycling (go back and check other sites)
+
+After scanning a section, the script pans the map to the next section using Leaflet's `panBy()` API via `page.evaluate()`. This ensures each section gets its own screenshot for water proximity analysis.
+
+Flow per section:
+1. Get all section label positions from the Leaflet marker pane
+2. Pan the map center to each section's coordinates using the Leaflet JS API
+3. Wait for map to settle
+4. Take a screenshot of the section view
+5. Run pixel-level water detection on the screenshot
+6. Click each green marker to extract site numbers
+7. Reset and move to the next section
+
+### Screenshot analysis for water detection
+
 ### 6. SPA loading retry logic
 
 The Ontario Parks site uses Azure WAF (Front Door) which sometimes presents a CAPTCHA challenge. If the SPA doesn't load:
