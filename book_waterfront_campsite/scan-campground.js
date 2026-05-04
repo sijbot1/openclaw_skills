@@ -19,7 +19,6 @@ async function shot(p, l) {
   await p.screenshot({ path: f, fullPage: false }); return f;
 }
 
-// Pixel-level water detection
 async function checkWater(imgPath, markers, pad = 40) {
   const sharp = require('sharp');
   const img = sharp(imgPath);
@@ -44,7 +43,6 @@ async function checkWater(imgPath, markers, pad = 40) {
   return res;
 }
 
-// Pan map to bring a screen coordinate to center using Leaflet API
 async function panMapTo(p, targetX, targetY) {
   return await p.evaluate(({ tx, ty }) => {
     const mapDiv = document.querySelector('.leaflet-container');
@@ -70,26 +68,32 @@ async function panMapTo(p, targetX, targetY) {
   }, { tx: targetX, ty: targetY });
 }
 
+function writePartial(waterfrontSites, allSites, sections) {
+  const r = {
+    campground: CAMP, dates: `${ARR}-${DEP}`, label: LABEL,
+    sections: sections.map(s => s.text),
+    availableCount: allSites.filter(s => s.isAvailable).length,
+    totalSitesFound: allSites.length,
+    waterfrontSites, allSites
+  };
+  fs.writeFileSync(OUT, JSON.stringify(r, null, 2));
+}
+
 (async () => {
   console.log(`SCANNING: ${CAMP} | ${ARR}-${DEP}`);
 
-  const b = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const b = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   const p = await b.newPage({ viewport: { width: 1440, height: 900 }, locale: 'en-CA', timezoneId: 'America/Toronto' });
 
-  // Load SPA with retry
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await p.goto('https://reservations.ontarioparks.ca/', { waitUntil: 'load', timeout: 60000 });
-    for (let i = 0; i < 40; i++) {
-      if (await p.evaluate(() => !!document.querySelector('#park-autocomplete-input'))) break;
-      await p.waitForTimeout(1000);
-    }
+  // Load SPA with stealth
+  await p.goto('https://reservations.ontarioparks.ca/', { waitUntil: 'load', timeout: 60000 });
+  for (let i = 0; i < 45; i++) {
     if (await p.evaluate(() => !!document.querySelector('#park-autocomplete-input'))) break;
-    console.log(`  Retry ${attempt + 1}...`);
+    await p.waitForTimeout(1000);
   }
 
   if (!(await p.evaluate(() => !!document.querySelector('#park-autocomplete-input')))) {
-    console.log('❌ Could not load SPA');
-    await shot(p, 'failed');
+    console.log('❌ SPA failed');
     await b.close(); return;
   }
 
@@ -119,12 +123,11 @@ async function panMapTo(p, targetX, targetY) {
 
   console.log('Map loaded');
 
-  // Step 1: Zoom in 3 levels using keyboard + 
+  // Zoom in
   for (let z = 0; z < 3; z++) { await p.keyboard.press('+'); await p.waitForTimeout(500); }
   await p.waitForTimeout(1000);
-  await shot(p, 'zoomed-in');
 
-  // Step 2: Get all section/campground labels with their screen positions
+  // Get sections
   const sections = await p.evaluate(() => {
     const pane = document.querySelector('.leaflet-marker-pane');
     if (!pane) return [];
@@ -141,10 +144,27 @@ async function panMapTo(p, targetX, targetY) {
     });
     return r;
   });
-  console.log(`Sections: ${sections.length}`);
-  sections.forEach(s => console.log(`  ${s.text} at (${s.x}, ${s.y})`));
 
-  // Step 3: For EACH section, pan to it, scan green markers, check water proximity
+  if (sections.length === 0) {
+    // Check if there's any marker pane at all
+    const hasPane = await p.evaluate(() => !!document.querySelector('.leaflet-marker-pane'));
+    const hasMap = await p.evaluate(() => !!document.querySelector('.leaflet-container'));
+    console.log(`Map: ${hasMap}, Pane: ${hasPane}, Sections: 0`);
+    if (hasMap && hasPane) {
+      // Map loaded but no section labels — maybe at wrong zoom. Try getting green dots directly
+      const greens = await p.evaluate(() => {
+        const pane = document.querySelector('.leaflet-marker-pane');
+        if (!pane) return [];
+        return Array.from(pane.querySelectorAll(':scope > div'))
+          .filter(d => { const cls = typeof d.className === 'string' ? d.className : ''; return cls.includes('available') && d.getBoundingClientRect().width > 1; })
+          .map(d => { const r = d.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2)}; });
+      });
+      console.log(`No sections but ${greens.length} green markers`);
+    }
+    writePartial([], [], [{ text: 'unknown' }]);
+    await b.close(); return;
+  }
+
   const allWaterfrontSites = [];
   const allSites = [];
 
@@ -152,39 +172,27 @@ async function panMapTo(p, targetX, targetY) {
     const sec = sections[si];
     console.log(`\n--- Section ${si + 1}: ${sec.text} ---`);
 
-    // Pan the map to center this section
-    const panned = await panMapTo(p, sec.x, sec.y);
-    console.log(`  Panned: ${panned}`);
-    await p.waitForTimeout(1500);
+    await panMapTo(p, sec.x, sec.y);
+    await p.waitForTimeout(1000);
 
-    // Take screenshot of this section
     const sectionShot = await shot(p, `section-${si + 1}-${sec.text.replace(/[^a-z0-9]/gi, '')}`);
 
-    // Get available (green) markers visible
     const greens = await p.evaluate(() => {
       const pane = document.querySelector('.leaflet-marker-pane');
       if (!pane) return [];
       return Array.from(pane.querySelectorAll(':scope > div'))
-        .filter(d => {
-          const cls = typeof d.className === 'string' ? d.className : '';
-          return cls.includes('available') && d.getBoundingClientRect().width > 1;
-        })
-        .map(d => {
-          const r = d.getBoundingClientRect();
-          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-        });
+        .filter(d => { const cls = typeof d.className === 'string' ? d.className : ''; return cls.includes('available') && d.getBoundingClientRect().width > 1; })
+        .map(d => { const r = d.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2)}; });
     });
-    console.log(`  Green markers: ${greens.length}`);
 
     if (greens.length === 0) continue;
-
-    // Check water proximity via pixel analysis on the screenshot
     const waterData = await checkWater(sectionShot, greens);
     const nearWater = waterData.filter(w => w.nearWater);
-    console.log(`  Near water: ${nearWater.length}`);
+    console.log(`  Greens: ${greens.length}, Near water: ${nearWater.length}`);
 
-    // Click each green marker to get site number
-    for (let gi = 0; gi < greens.length; gi++) {
+    // Click max 15 markers per section
+    const maxClicks = Math.min(greens.length, 15);
+    for (let gi = 0; gi < maxClicks; gi++) {
       const g = greens[gi];
       await p.mouse.click(g.x, g.y);
       await p.waitForTimeout(800);
@@ -198,51 +206,24 @@ async function panMapTo(p, targetX, targetY) {
       const isAvail = popup?.startsWith('Available');
       const wf = waterData.find(w => Math.abs(w.x - g.x) < 3 && Math.abs(w.y - g.y) < 3);
 
-      const siteInfo = {
-        siteNum,
-        section: sec.text,
-        isAvailable: !!isAvail,
-        waterDist: wf ? wf.waterDist : -1,
-        nearWater: wf ? wf.nearWater : false,
-        popup: popup?.substring(0, 200) || null
-      };
-
+      const siteInfo = { siteNum, section: sec.text, isAvailable: !!isAvail, waterDist: wf ? wf.waterDist : -1, nearWater: wf ? wf.nearWater : false, popup: popup?.substring(0, 200) || null };
       allSites.push(siteInfo);
       if (siteInfo.isAvailable && siteInfo.siteNum > 0) {
         console.log(`  Site ${siteNum}: ${isAvail ? '✅' : '❌'} water=${wf ? wf.waterDist + 'px' : '?'}`);
         if (siteInfo.nearWater) allWaterfrontSites.push(siteInfo);
       }
-
       await p.keyboard.press('Escape');
       await p.waitForTimeout(200);
     }
+
+    // Write after each section
+    writePartial(allWaterfrontSites, allSites, sections);
   }
 
-  // Results
-  const result = {
-    campground: CAMP,
-    dates: `${ARR}-${DEP}`,
-    label: LABEL,
-    sections: sections.map(s => s.text),
-    availableCount: allSites.filter(s => s.isAvailable).length,
-    totalSitesFound: allSites.length,
-    waterfrontSites: allWaterfrontSites,
-    allSites
-  };
-
-  fs.writeFileSync(OUT, JSON.stringify(result, null, 2));
-  console.log(`\n✅ Written to ${OUT}`);
-
-  // Print waterfront summary
-  if (allWaterfrontSites.length > 0) {
-    console.log(`\n🌊 WATERFRONT SITES FOUND:`);
-    allWaterfrontSites.sort((a, b) => a.waterDist - b.waterDist);
-    allWaterfrontSites.forEach(s => {
-      console.log(`  Site ${s.siteNum} in ${s.section} — ${s.waterDist}px from water`);
-    });
-  } else {
-    console.log(`\n❌ No waterfront sites found for this search.`);
-  }
+  writePartial(allWaterfrontSites, allSites, sections);
+  console.log(`\n✅ ${allWaterfrontSites.length} waterfront sites found`);
+  allWaterfrontSites.sort((a, b) => a.waterDist - b.waterDist).forEach(s =>
+    console.log(`  Site ${s.siteNum} in ${s.section} — ${s.waterDist}px from water`));
 
   await shot(p, 'final');
   await b.close();

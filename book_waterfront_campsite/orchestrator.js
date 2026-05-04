@@ -154,9 +154,16 @@ async function discoverCampgrounds(parkName) {
     const jsonLine = lines.find(l => l.startsWith('['));
     if (jsonLine) {
       const options = JSON.parse(jsonLine);
-      const campgrounds = options.filter(o => o.startsWith(parkName + ' - '));
+      // First try: "Park - Campground" format (Algonquin)
+      let campgrounds = options.filter(o => o.startsWith(parkName + ' - '));
+      // Fallback: use the park name directly (Killbear, Pinery, etc.)
+      if (campgrounds.length === 0 && options.length > 0) {
+        campgrounds = options;
+        console.log(`  Park names found: ${campgrounds.map(c => c.substring(0, 40)).join(', ')}`);
+      } else {
+        console.log(`  Found ${campgrounds.length} campgrounds: ${campgrounds.map(c => c.replace(parkName + ' - ', '')).join(', ')}`);
+      }
       fs.writeFileSync(cacheFile, JSON.stringify(campgrounds, null, 2));
-      console.log(`  Found ${campgrounds.length} campgrounds: ${campgrounds.map(c => c.replace(parkName + ' - ', '')).join(', ')}`);
       return campgrounds;
     }
   } catch (e) {
@@ -174,7 +181,7 @@ async function runScan(campground, arr, dep) {
   console.log(`\n  🔎 Scanning: ${campground} (${arr}-${dep})`);
   
   return new Promise((resolve) => {
-    const proc = spawn('bash', ['-c', `CAMP="${campground}" ARR_DAY=${arr} DEP_DAY=${dep} LABEL=${label} timeout 180 node ${SCRIPT}`], {
+    const proc = spawn('bash', ['-c', `CAMP="${campground}" ARR_DAY=${arr} DEP_DAY=${dep} LABEL=${label} timeout 600 node ${SCRIPT}`], {
       stdio: ['pipe', fs.openSync(logFile, 'w'), fs.openSync(logFile, 'w')]
     });
     
