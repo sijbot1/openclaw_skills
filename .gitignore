@@ -1,0 +1,6 @@
+node_modules/
+shots-*/
+results-*.json
+results/
+.campgrounds-*.json
+package-lock.json
