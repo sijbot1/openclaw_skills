@@ -106,12 +106,49 @@ function writePartial(waterfrontSites, allSites, sections) {
   await p.locator('mat-option').first().click({ force: true });
   await p.waitForTimeout(300);
   await p.keyboard.press('Escape'); await p.waitForTimeout(100);
+  const TARGET_MONTH = parseInt(process.env.MONTH || '5');
+
+  // Navigate Angular Material calendar to target month
+  async function navigateCalendarToMonth(page, targetMonth) {
+    const monthNames = ['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let currentLabel = await page.evaluate(() => {
+      const hdr = document.querySelector('.mat-calendar-period-button');
+      return hdr ? hdr.innerText.trim() : '';
+    });
+    if (!currentLabel) {
+      // Fallback: try the aria-label on calendar header
+      currentLabel = await page.evaluate(() => {
+        const el = document.querySelector('.mat-calendar-header');
+        return el ? el.innerText.trim() : '';
+      });
+    }
+    const monthMatch = currentLabel.match(/^([A-Z][a-z]+)/);
+    if (!monthMatch) {
+      // Can't detect month, try clicking the target day directly
+      return;
+    }
+    const currentMonthNum = monthNames.indexOf(monthMatch[1]);
+    if (currentMonthNum <= 0) return;
+    const diff = targetMonth - currentMonthNum;
+    const arrowBtn = diff > 0 ? '.mat-calendar-next-button' : '.mat-calendar-previous-button';
+    const clicks = Math.abs(diff);
+    for (let i = 0; i < clicks; i++) {
+      const btn = page.locator(arrowBtn);
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click({ force: true });
+        await page.waitForTimeout(200);
+      }
+    }
+  }
+
   await p.locator('#arrival-date-field').click({ force: true });
-  await p.waitForTimeout(600);
+  await p.waitForTimeout(800);
+  await navigateCalendarToMonth(p, TARGET_MONTH);
+  await p.waitForTimeout(300);
   await p.locator(`.mat-calendar-body-cell-content:has-text("${ARR}")`).first().click({ force: true });
-  await p.waitForTimeout(200);
+  await p.waitForTimeout(400);
   await p.locator(`.mat-calendar-body-cell-content:has-text("${DEP}")`).first().click({ force: true });
-  await p.waitForTimeout(200);
+  await p.waitForTimeout(400);
   await p.locator('#party-size-field').click({ force: true }).catch(() => {});
   await p.locator('#party-size-field').fill('2');
   await p.locator('#equipment-field').click({ force: true });
