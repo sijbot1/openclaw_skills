@@ -1,4 +1,6 @@
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+chromium.use(StealthPlugin());
 const path = require('path');
 const fs = require('fs');
 
@@ -44,27 +46,20 @@ async function checkWater(imgPath, markers, pad = 40) {
 
 // Pan map to bring a screen coordinate to center using Leaflet API
 async function panMapTo(p, targetX, targetY) {
-  return await p.evaluate((tx, ty) => {
+  return await p.evaluate(({ tx, ty }) => {
     const mapDiv = document.querySelector('.leaflet-container');
     if (!mapDiv) return false;
-    // Search for Leaflet map instance in DOM element properties
     const searchForMap = (obj, depth = 0) => {
       if (depth > 3 || !obj) return null;
       for (const k of Object.getOwnPropertyNames(obj)) {
-        try {
-          const v = obj[k];
-          if (v && typeof v === 'object' && v.panBy && v.getCenter) return v;
-        } catch (e) { continue; }
+        try { const v = obj[k]; if (v && typeof v === 'object' && v.panBy && v.getCenter) return v; } catch (e) { continue; }
       }
       return null;
     };
     let map = searchForMap(mapDiv);
     if (!map) {
       for (const k of Object.getOwnPropertyNames(mapDiv)) {
-        try {
-          map = searchForMap(mapDiv[k], 1);
-          if (map) break;
-        } catch (e) { continue; }
+        try { map = searchForMap(mapDiv[k], 1); if (map) break; } catch (e) { continue; }
       }
     }
     if (!map) return false;
@@ -72,7 +67,7 @@ async function panMapTo(p, targetX, targetY) {
     const pxCenter = map.latLngToContainerPoint(center);
     map.panBy([tx - pxCenter.x, ty - pxCenter.y], { animate: true, duration: 0.3 });
     return true;
-  }, targetX, targetY);
+  }, { tx: targetX, ty: targetY });
 }
 
 (async () => {
