@@ -1,0 +1,15 @@
+{
+  "name": "book-waterfront-campsite",
+  "version": "1.0.0",
+  "description": "Ontario Parks waterfront campsite finder using Playwright",
+  "main": "scan-campground.js",
+  "scripts": {
+    "scan": "node scan-campground.js"
+  },
+  "dependencies": {
+    "playwright": "^1.59.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "sharp": "^0.33.0"
+  }
+}
